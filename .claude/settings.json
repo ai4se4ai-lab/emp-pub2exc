@@ -1,0 +1,21 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip:*)",
+      "Read(**)",
+      "Write(outputs/**)",
+      "Write(.comms/**)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Write(CLAUDE.md)",
+      "Write(.claude/rules/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [".claude/hooks/validate_write.sh"],
+    "PostToolUse": [".claude/hooks/log_tool_use.sh"]
+  }
+}

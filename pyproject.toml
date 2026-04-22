@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "research-to-software"
+version = "0.1.0"
+description = "Agentic framework for transforming research publications into traceable software"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "pydantic>=2.0.0",
+    "pdfminer.six>=20221105",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "black>=24.0"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=agents --cov=shared --cov-report=term-missing"
+markers = ["e2e: end-to-end tests requiring a real ANTHROPIC_API_KEY"]
+
+[tool.coverage.run]
+omit = ["tests/*", "scripts/*"]
