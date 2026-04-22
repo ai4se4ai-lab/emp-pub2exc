@@ -1,4 +1,4 @@
-# Research-to-Software Agentic Framework
+# emp-pub2exc Agentic Framework
 
 An agentic pipeline that transforms academic research publications into traceable, production-ready software. Four specialized AI agents collaborate through a shared communication channel, each building on the outputs of the previous stage.
 
@@ -56,8 +56,8 @@ An agentic pipeline that transforms academic research publications into traceabl
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/your-org/research-to-software.git
-cd research-to-software
+git clone https://github.com/your-org/emp-pub2exc.git
+cd emp-pub2exc
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -85,7 +85,7 @@ python scripts/run_pipeline.py --paper path/to/paper.pdf --skip-hitl
 ## Repository Structure
 
 ```
-research-to-software/
+emp-pub2exc/
 ├── CLAUDE.md                        # Claude Code project context
 ├── .mcp.json                        # MCP server integrations
 ├── .claude/
