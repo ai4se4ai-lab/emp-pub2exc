@@ -34,6 +34,7 @@ This layer uses three sequential sub-agents internally:
 - `Dockerfile` with reproducible build
 - `requirements.txt` pinned versions
 - `deployment_config.json` with environment variables and resource requirements
+- Deployment config should include provider-agnostic LLM settings so generated software can run with Anthropic, OpenAI, or Ollama backends
 
 ## Message to Emit
 ```json

@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 from shared.channel import post_message, log_assumption
+from shared.llm_client import load_env_file
 from shared.message_schema import (
     AgentMessage,
     AgentName,
@@ -19,6 +20,7 @@ from shared.message_schema import (
 
 logger = logging.getLogger(__name__)
 
+load_env_file()
 OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", "outputs"))
 HUMAN_REVIEW_ENABLED = os.getenv("HUMAN_REVIEW_ENABLED", "true").lower() == "true"
 
