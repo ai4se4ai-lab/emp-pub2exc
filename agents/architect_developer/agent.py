@@ -222,7 +222,16 @@ Always include: anthropic, pydantic, pytest, pytest-cov""",
             "run_id": self.run_id,
             "python_version": "3.11",
             "entry_point": "scripts/run_pipeline.py",
-            "environment_variables": ["ANTHROPIC_API_KEY", "HUMAN_REVIEW_ENABLED"],
+            "environment_variables": [
+                "LLM_PROVIDER",
+                "DEFAULT_MODEL",
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OLLAMA_BASE_URL",
+                "OLLAMA_MODEL",
+                "HUMAN_REVIEW_ENABLED",
+            ],
             "resource_requirements": {"memory_gb": 4, "cpu_cores": 2},
         }
         self._write("deployment_config.json", deploy_config)

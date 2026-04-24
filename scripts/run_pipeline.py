@@ -5,6 +5,7 @@ Orchestrates the full research-to-software pipeline.
 Usage:
     python scripts/run_pipeline.py --paper path/to/paper.pdf
     python scripts/run_pipeline.py --paper path/to/paper.pdf --skip-hitl
+    python scripts/run_pipeline.py --example-dir tests/examples/KGTN-en
     python scripts/run_pipeline.py --paper path/to/paper.pdf --start-from formalizer
 """
 from __future__ import annotations
@@ -19,10 +20,14 @@ from pathlib import Path
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from shared.llm_client import load_env_file
+load_env_file()
+
 from agents.paper_analyst.agent import PaperAnalystAgent
 from agents.formalizer.agent import FormalizerAgent
 from agents.architect_developer.agent import ArchitectDeveloperAgent
 from agents.auditor_supervisor.agent import AuditorSupervisorAgent
+from shared.example_utils import resolve_example_context
 
 logging.basicConfig(
     level=os.getenv("PIPELINE_LOG_LEVEL", "INFO"),
@@ -78,7 +83,15 @@ def run_pipeline(paper_path: Path, skip_hitl: bool, start_from: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Research-to-Software Pipeline")
-    parser.add_argument("--paper", required=True, help="Path to research paper (PDF or .txt)")
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
+        "--paper",
+        help="Path to research paper (PDF, TXT, or Markdown)",
+    )
+    source_group.add_argument(
+        "--example-dir",
+        help="Path to an example directory under tests/examples/",
+    )
     parser.add_argument("--skip-hitl", action="store_true", help="Skip human-in-the-loop checkpoints")
     parser.add_argument(
         "--start-from",
@@ -88,7 +101,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    paper_path = Path(args.paper)
+    if args.example_dir:
+        context = resolve_example_context(args.example_dir)
+        paper_path = context.paper_path
+        logger.info("Resolved example directory: %s", context.example_dir)
+        if context.repo_url:
+            logger.info("Reference repo: %s", context.repo_url)
+    else:
+        paper_path = Path(args.paper)
+
     if not paper_path.exists():
         print(f"Error: paper file not found: {paper_path}", file=sys.stderr)
         sys.exit(1)

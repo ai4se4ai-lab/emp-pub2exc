@@ -22,6 +22,10 @@ All outputs written to `outputs/<run_id>/auditor_supervisor/`:
 | `gaps.json` | Requirements or claims with no corresponding code |
 | `human_review_points.json` | Items flagged for human expert review |
 | `assumption_deviation_report.json` | Where implementation deviated from paper assumptions |
+| `repo_comparison_inventory.json` | Structured inventory of the reference repo from `repo.txt` |
+| `repo_coverage_report.json` | Coverage comparison between generated outputs and existing repo |
+| `repo_gap_analysis.json` | Missing/partial repo functionality grouped for action |
+| `validation_report.md` | Human-readable repo-aware validation report |
 | `traceability_report.md` | Human-readable final report |
 
 ## Fidelity Analysis Steps
@@ -29,6 +33,7 @@ All outputs written to `outputs/<run_id>/auditor_supervisor/`:
 2. **Gap Detection**: Cross-reference with `functional_requirements.json` — flag anything uncovered
 3. **Assumption Audit**: For each entry in `assumptions.jsonl`, check if the implementation honors or deviates from it
 4. **Metric Verification**: Confirm experiment runners target the same metrics as `metrics_results.json`
+5. **Reference Repo Validation**: If `repo.txt` exists beside the paper input, compare generated outputs against the referenced repository structure, tests, deployment assets, and notable functionality
 
 ## Traceability Link Format
 ```json

@@ -66,7 +66,7 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env and set ANTHROPIC_API_KEY
+# Edit .env and choose your LLM provider/model
 ```
 
 ### 3. Run the full pipeline
@@ -75,9 +75,16 @@ cp .env.example .env
 python scripts/run_pipeline.py --paper path/to/paper.pdf
 ```
 
+Or resolve an example fixture automatically:
+
+```bash
+python scripts/run_pipeline.py --example-dir tests/examples/KGTN-en
+```
+
 To skip human review checkpoints (fast mode):
 ```bash
 python scripts/run_pipeline.py --paper path/to/paper.pdf --skip-hitl
+python scripts/run_pipeline.py --example-dir tests/examples/KGTN-en --skip-hitl
 ```
 
 ---
@@ -116,7 +123,8 @@ emp-pub2exc/
 ├── shared/
 │   ├── base_agent.py                # Abstract base with HITL, logging
 │   ├── channel.py                   # JSONL communication bus
-│   ├── llm_client.py                # Anthropic API wrapper
+│   ├── llm_client.py                # Anthropic/OpenAI/Ollama router
+│   ├── example_utils.py             # Example fixture resolver
 │   └── message_schema.py            # Pydantic message types
 ├── scripts/
 │   ├── run_pipeline.py              # Full pipeline orchestrator
@@ -199,11 +207,31 @@ Custom slash commands available in Claude Code:
 
 ---
 
+## Reference Repo Validation
+
+If an example directory includes a `repo.txt` file next to the paper, the auditor stage reads that URL and generates:
+
+- `repo_comparison_inventory.json`
+- `repo_coverage_report.json`
+- `repo_gap_analysis.json`
+- `validation_report.md`
+
+These artifacts compare the generated implementation against the referenced repository structure, functionality, tests, and deployment assets.
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | *(required)* | Your Anthropic API key |
+| `LLM_PROVIDER` | `anthropic` | Active backend: `anthropic`, `openai`, or `ollama` |
+| `DEFAULT_MODEL` | provider-specific | Model name used unless a call overrides it |
+| `ANTHROPIC_API_KEY` | empty | Anthropic API key when `LLM_PROVIDER=anthropic` |
+| `OPENAI_API_KEY` | empty | OpenAI API key when `LLM_PROVIDER=openai` |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
+| `OPENAI_MODEL` | `gpt-4.1-mini` | Default OpenAI model |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_MODEL` | `llama3.1` | Default Ollama model |
 | `PIPELINE_LOG_LEVEL` | `INFO` | Log verbosity |
 | `HUMAN_REVIEW_ENABLED` | `true` | Enable HITL checkpoints |
 | `OUTPUT_ROOT` | `outputs` | Where run artifacts are stored |

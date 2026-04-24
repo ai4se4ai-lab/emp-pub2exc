@@ -8,6 +8,7 @@ import ast
 import json
 import logging
 from pathlib import Path
+from urllib import error, parse, request
 
 from shared.base_agent import BaseAgent, OUTPUT_ROOT
 from shared.channel import read_messages
@@ -43,6 +44,7 @@ class AuditorSupervisorAgent(BaseAgent):
 
         # Step 1: Code analysis
         code_inventory = self._analyze_code()
+        generated_assets = self._collect_generated_assets()
 
         # Step 2: Traceability links
         traceability = self._build_traceability(requirements, code_inventory, methods)
@@ -60,9 +62,41 @@ class AuditorSupervisorAgent(BaseAgent):
         deviation_report = self._build_deviation_report(assumptions, traceability, code_inventory)
         self._write("assumption_deviation_report.json", deviation_report)
 
-        # Step 6: Final Markdown report
+        # Step 6: Reference repo validation
+        repo_inventory = self._build_reference_repo_inventory(intent)
+        self._write("repo_comparison_inventory.json", repo_inventory)
+
+        repo_coverage = self._build_repo_coverage_report(
+            repo_inventory,
+            requirements,
+            traceability,
+            code_inventory,
+            generated_assets,
+            architecture_md,
+        )
+        self._write("repo_coverage_report.json", repo_coverage)
+
+        repo_gap_analysis = self._build_repo_gap_analysis(repo_coverage)
+        self._write("repo_gap_analysis.json", repo_gap_analysis)
+
+        validation_md = self._generate_validation_report(
+            intent,
+            repo_inventory,
+            repo_coverage,
+            repo_gap_analysis,
+        )
+        (self.output_dir / "validation_report.md").write_text(validation_md, encoding="utf-8")
+
+        # Step 7: Final Markdown report
         report_md = self._generate_report(
-            intent, traceability, gaps, review_points, deviation_report, architecture_md
+            intent,
+            traceability,
+            gaps,
+            review_points,
+            deviation_report,
+            architecture_md,
+            repo_coverage,
+            repo_gap_analysis,
         )
         (self.output_dir / "traceability_report.md").write_text(report_md, encoding="utf-8")
 
@@ -70,6 +104,7 @@ class AuditorSupervisorAgent(BaseAgent):
         artifact_refs = [
             f"outputs/{self.run_id}/auditor_supervisor/traceability_report.md",
             f"outputs/{self.run_id}/auditor_supervisor/gaps.json",
+            f"outputs/{self.run_id}/auditor_supervisor/validation_report.md",
         ]
         self._request_human_review("HITL-4", artifact_refs)
 
@@ -137,6 +172,33 @@ class AuditorSupervisorAgent(BaseAgent):
                 logger.warning("Syntax error in %s: %s", py_file, e)
 
         return {"functions": inventory}
+
+    def _collect_generated_assets(self) -> dict:
+        base_dir = OUTPUT_ROOT / self.run_id / "architect_developer"
+        src_dir = base_dir / "src"
+        tests_dir = base_dir / "tests"
+
+        src_files = (
+            sorted(str(path.relative_to(base_dir)) for path in src_dir.rglob("*.py"))
+            if src_dir.exists()
+            else []
+        )
+        test_files = (
+            sorted(str(path.relative_to(base_dir)) for path in tests_dir.rglob("*.py"))
+            if tests_dir.exists()
+            else []
+        )
+        deployment_files = [
+            name
+            for name in ["Dockerfile", "requirements.txt", "deployment_config.json", "api_spec.json"]
+            if (base_dir / name).exists()
+        ]
+        return {
+            "src_files": src_files,
+            "test_files": test_files,
+            "deployment_files": deployment_files,
+            "has_architecture": (base_dir / "architecture.md").exists(),
+        }
 
     @staticmethod
     def _extract_fr_refs(source: str, fn_name: str) -> list[str]:
@@ -265,6 +327,246 @@ TRACEABILITY LINKS:
         )
 
     # ------------------------------------------------------------------
+    # Reference repo validation
+    # ------------------------------------------------------------------
+
+    def _build_reference_repo_inventory(self, intent: dict) -> dict:
+        repo_url = self._resolve_reference_repo_url(intent)
+        if not repo_url:
+            return {
+                "status": "unavailable",
+                "repo_url": None,
+                "reason": "No repo.txt found next to the input paper.",
+                "components": [],
+            }
+
+        parsed = self._parse_github_repo(repo_url)
+        if not parsed:
+            return {
+                "status": "unsupported",
+                "repo_url": repo_url,
+                "reason": "Only GitHub repository URLs are supported for automated comparison.",
+                "components": [],
+            }
+
+        owner, repo = parsed
+        try:
+            repo_meta = self._fetch_json(f"https://api.github.com/repos/{owner}/{repo}")
+            default_branch = repo_meta.get("default_branch", "main")
+            tree = self._fetch_json(
+                f"https://api.github.com/repos/{owner}/{repo}/git/trees/{default_branch}?recursive=1"
+            )
+            paths = sorted(
+                item["path"]
+                for item in tree.get("tree", [])
+                if item.get("type") == "blob"
+            )
+            sampled_paths = self._select_reference_paths(paths)
+            sampled_files = {
+                path: self._fetch_github_file(owner, repo, default_branch, path)
+                for path in sampled_paths
+            }
+        except Exception as exc:
+            logger.warning("Reference repo inventory failed for %s: %s", repo_url, exc)
+            return {
+                "status": "error",
+                "repo_url": repo_url,
+                "reason": str(exc),
+                "components": [],
+            }
+
+        raw_inventory = {
+            "repo_url": repo_url,
+            "repo_name": f"{owner}/{repo}",
+            "default_branch": default_branch,
+            "path_count": len(paths),
+            "paths": paths[:300],
+            "sampled_files": sampled_files,
+        }
+        inventory = call_claude_json(
+            system=AUDITOR_SYSTEM,
+            user=f"""Summarize the reference repository into a compact software inventory.
+
+Return JSON:
+{{
+  "status": "ok",
+  "repo_url": "{repo_url}",
+  "repo_name": "{owner}/{repo}",
+  "default_branch": "{default_branch}",
+  "structure_summary": {{
+    "python_files": 0,
+    "test_files": 0,
+    "configs": [],
+    "experiments": []
+  }},
+  "components": [{{
+    "name": "...",
+    "category": "module|pipeline|experiment|test|deployment|dataset|utility",
+    "purpose": "...",
+    "evidence": ["path/to/file.py"]
+  }}],
+  "notable_existing_functionality": ["..."],
+  "test_assets": ["..."],
+  "deployment_assets": ["..."],
+  "notes": ["..."]
+}}
+
+REFERENCE REPO SNAPSHOT:
+{json.dumps(raw_inventory, indent=2)[:14000]}""",
+        )
+        inventory["raw_snapshot"] = {
+            "path_count": len(paths),
+            "sampled_paths": sampled_paths,
+        }
+        return inventory
+
+    def _build_repo_coverage_report(
+        self,
+        repo_inventory: dict,
+        requirements: dict,
+        traceability: dict,
+        code_inventory: dict,
+        generated_assets: dict,
+        architecture_md: str,
+    ) -> dict:
+        if repo_inventory.get("status") != "ok":
+            return {
+                "status": "skipped",
+                "summary": {
+                    "overall_coverage": 0,
+                    "structure_coverage": 0,
+                    "functionality_coverage": 0,
+                    "tests_coverage": 0,
+                    "deployment_coverage": 0,
+                },
+                "matched_components": [],
+                "partial_components": [],
+                "missing_components": [],
+                "extra_generated_components": [],
+                "notes": [repo_inventory.get("reason", "Reference repo inventory unavailable.")],
+            }
+
+        return call_claude_json(
+            system=AUDITOR_SYSTEM,
+            user=f"""Compare generated artifacts against the reference repository and score coverage.
+
+Return JSON:
+{{
+  "status": "ok",
+  "summary": {{
+    "overall_coverage": 0,
+    "structure_coverage": 0,
+    "functionality_coverage": 0,
+    "tests_coverage": 0,
+    "deployment_coverage": 0
+  }},
+  "matched_components": [{{
+    "name": "...",
+    "category": "module|pipeline|experiment|test|deployment|dataset|utility",
+    "coverage": "full",
+    "reference_evidence": ["..."],
+    "generated_evidence": ["..."],
+    "notes": ""
+  }}],
+  "partial_components": [{{
+    "name": "...",
+    "category": "module|pipeline|experiment|test|deployment|dataset|utility",
+    "coverage": "partial",
+    "reference_evidence": ["..."],
+    "generated_evidence": ["..."],
+    "notes": ""
+  }}],
+  "missing_components": [{{
+    "name": "...",
+    "category": "module|pipeline|experiment|test|deployment|dataset|utility",
+    "reason": "...",
+    "reference_evidence": ["..."],
+    "suggested_requirement_ids": ["FR-001"]
+  }}],
+  "extra_generated_components": [{{
+    "name": "...",
+    "category": "module|test|deployment|utility",
+    "generated_evidence": ["..."],
+    "notes": ""
+  }}],
+  "notes": ["..."]
+}}
+
+REFERENCE INVENTORY:
+{json.dumps(repo_inventory, indent=2)[:7000]}
+
+GENERATED ASSETS:
+{json.dumps(generated_assets, indent=2)[:3000]}
+
+GENERATED CODE INVENTORY:
+{json.dumps(code_inventory, indent=2)[:4000]}
+
+TRACEABILITY:
+{json.dumps(traceability, indent=2)[:4000]}
+
+REQUIREMENTS:
+{json.dumps(requirements.get("items", []), indent=2)[:4000]}
+
+ARCHITECTURE:
+{architecture_md[:2500]}""",
+        )
+
+    def _build_repo_gap_analysis(self, repo_coverage: dict) -> dict:
+        missing = repo_coverage.get("missing_components", [])
+        partial = repo_coverage.get("partial_components", [])
+        return {
+            "status": repo_coverage.get("status", "unknown"),
+            "missing_count": len(missing),
+            "partial_count": len(partial),
+            "items": [
+                {
+                    "name": item.get("name", ""),
+                    "category": item.get("category", ""),
+                    "coverage": "missing",
+                    "details": item.get("reason", ""),
+                    "reference_evidence": item.get("reference_evidence", []),
+                    "suggested_requirement_ids": item.get("suggested_requirement_ids", []),
+                }
+                for item in missing
+            ] + [
+                {
+                    "name": item.get("name", ""),
+                    "category": item.get("category", ""),
+                    "coverage": "partial",
+                    "details": item.get("notes", ""),
+                    "reference_evidence": item.get("reference_evidence", []),
+                    "suggested_requirement_ids": [],
+                }
+                for item in partial
+            ],
+        }
+
+    def _generate_validation_report(
+        self,
+        intent: dict,
+        repo_inventory: dict,
+        repo_coverage: dict,
+        repo_gap_analysis: dict,
+    ) -> str:
+        return call_claude(
+            system="You are a technical auditor. Write a precise Markdown validation report.",
+            user=f"""Generate a Markdown report comparing the generated implementation against the reference repository.
+
+Include sections:
+1. Reference Repository Summary
+2. Coverage Scorecard
+3. Matched Components
+4. Partial Coverage
+5. Missing Functionality
+6. Recommendation
+
+PAPER: {intent.get('paper_path', 'Unknown')}
+REFERENCE INVENTORY: {json.dumps(repo_inventory, indent=2)[:5000]}
+REPO COVERAGE: {json.dumps(repo_coverage, indent=2)[:5000]}
+REPO GAPS: {json.dumps(repo_gap_analysis, indent=2)[:3000]}""",
+        )
+
+    # ------------------------------------------------------------------
     # Final report
     # ------------------------------------------------------------------
 
@@ -276,6 +578,8 @@ TRACEABILITY LINKS:
         review_points: dict,
         deviation_report: dict,
         architecture_md: str,
+        repo_coverage: dict,
+        repo_gap_analysis: dict,
     ) -> str:
         links = traceability.get("links", [])
         total = len(links)
@@ -292,13 +596,16 @@ Include sections:
 2. Paper Overview
 3. Traceability Matrix (table)
 4. Gap Analysis
-5. Human Review Points
-6. Assumption Deviation Report
-7. Recommendations
+5. Reference Repo Coverage Summary
+6. Human Review Points
+7. Assumption Deviation Report
+8. Recommendations
 
 PAPER TITLE: {intent.get('paper_path', 'Unknown')}
 TRACEABILITY: {json.dumps(traceability, indent=2)[:4000]}
 GAPS: {json.dumps(gaps, indent=2)[:2000]}
+REPO COVERAGE: {json.dumps(repo_coverage, indent=2)[:2500]}
+REPO GAPS: {json.dumps(repo_gap_analysis, indent=2)[:2000]}
 REVIEW POINTS: {json.dumps(review_points, indent=2)[:2000]}
 DEVIATIONS: {json.dumps(deviation_report, indent=2)[:2000]}""",
         )
@@ -329,3 +636,81 @@ DEVIATIONS: {json.dumps(deviation_report, indent=2)[:2000]}""",
         path = self.output_dir / filename
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         logger.debug("Wrote %s", path)
+
+    @staticmethod
+    def _resolve_reference_repo_url(intent: dict) -> str | None:
+        paper_path = intent.get("paper_path")
+        if not paper_path:
+            return None
+        repo_path = Path(paper_path).parent / "repo.txt"
+        if not repo_path.exists():
+            return None
+        raw = repo_path.read_text(encoding="utf-8").strip()
+        return raw or None
+
+    @staticmethod
+    def _parse_github_repo(repo_url: str) -> tuple[str, str] | None:
+        parsed = parse.urlparse(repo_url)
+        if parsed.netloc.lower() != "github.com":
+            return None
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) < 2:
+            return None
+        return parts[0], parts[1].removesuffix(".git")
+
+    @staticmethod
+    def _select_reference_paths(paths: list[str], limit: int = 12) -> list[str]:
+        preferred: list[str] = []
+        keywords = (
+            "readme",
+            "requirements",
+            "pyproject",
+            "setup.py",
+            "src/",
+            "tests/",
+            "train",
+            "model",
+            "dataset",
+            "experiment",
+        )
+        for path in paths:
+            lower = path.lower()
+            if lower.endswith((".md", ".py", ".toml", ".txt", ".yaml", ".yml", ".json")) and any(
+                key in lower for key in keywords
+            ):
+                preferred.append(path)
+        if len(preferred) >= limit:
+            return preferred[:limit]
+        remaining = [
+            path
+            for path in paths
+            if path not in preferred and path.lower().endswith((".py", ".md", ".toml", ".txt"))
+        ]
+        return (preferred + remaining)[:limit]
+
+    @staticmethod
+    def _fetch_json(url: str) -> dict:
+        req = request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "research-to-software-auditor",
+            },
+        )
+        try:
+            with request.urlopen(req) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"GitHub request failed ({exc.code}): {body}") from exc
+
+    @staticmethod
+    def _fetch_github_file(owner: str, repo: str, branch: str, path: str) -> str:
+        url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+        req = request.Request(url, headers={"User-Agent": "research-to-software-auditor"})
+        try:
+            with request.urlopen(req) as response:
+                return response.read().decode("utf-8", errors="replace")[:4000]
+        except error.HTTPError as exc:
+            logger.warning("Skipping reference file %s: HTTP %s", path, exc.code)
+            return ""
